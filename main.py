@@ -1,112 +1,67 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Request, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 
-# Internal imports
 from auth import verify_api_key
 from detector import detect_scam
 from extractor import extract_entities
-from agent_state import AgentState
 from llm import decide_next_message
-from scammer_api import send_to_scammer
 
-# -----------------------------
-# Create FastAPI app
-# -----------------------------
-app = FastAPI(title="Agentic AI Honeypot")
+app = FastAPI(title="Agentic AI Honeypot API")
 
-# -----------------------------
-# Request Schema
-# -----------------------------
-class HoneypotInput(BaseModel):
+
+# -------------------- Models --------------------
+
+class HoneypotRequest(BaseModel):
     conversation_id: str
     incoming_message: str
-    source: str
-    timestamp: str
+    source: Optional[str] = None
+    timestamp: Optional[str] = None
 
-# -----------------------------
-# Health Check
-# -----------------------------
+
+# -------------------- Routes --------------------
+
 @app.get("/")
 def root():
     return {"status": "honeypot api running"}
 
-# -----------------------------
-# Secure Test Endpoint
-# -----------------------------
-@app.get("/secure")
-def secure_test(auth=Depends(verify_api_key)):
-    return {"status": "authenticated access granted"}
 
-# -----------------------------
-# Agentic Honeypot Endpoint
-# -----------------------------
 @app.post("/api/v1/honeypot/analyze")
-def analyze(
-    data: HoneypotInput,
-    auth=Depends(verify_api_key)
+async def analyze_honeypot(
+    req: HoneypotRequest,
+    request: Request
 ):
-    # 1️⃣ Scam detection
-    detection = detect_scam(data.incoming_message)
+    # -------- AUTH --------
+    verify_api_key(request)
 
-    # If not a scam, exit early
-    if not detection["scam_detected"]:
+    try:
+        # -------- SCAM DETECTION --------
+        scam_result = detect_scam(req.incoming_message) or {}
+
+        # -------- ENTITY EXTRACTION --------
+        entities = extract_entities(req.incoming_message) or {}
+
+        # -------- AGENT RESPONSE --------
+        history = [
+            {"role": "user", "content": req.incoming_message}
+        ]
+        agent_reply = decide_next_message(history)
+
+        # -------- SAFE RESPONSE --------
         return {
-            "conversation_id": data.conversation_id,
-            "scam_detected": False,
-            "confidence_score": detection["confidence_score"],
-            "risk_level": "LOW",
-            "message": "No scam indicators detected"
+            "conversation_id": req.conversation_id,
+            "scam_detected": scam_result.get("scam_detected", False),
+            "risk_level": scam_result.get("risk_level", "LOW"),
+            "confidence_score": scam_result.get("confidence_score", 0.0),
+            "matched_keywords": scam_result.get("matched_keywords", []),
+            "extracted_entities": entities,
+            "agent_reply": agent_reply
         }
 
-    # 2️⃣ Initialize honeypot agent state
-    state = AgentState()
-
-    # Seed conversation with initial message
-    state.history.append({
-        "role": "user",
-        "content": data.incoming_message
-    })
-
-    MAX_TURNS = 3
-
-    # 3️⃣ Agentic conversation loop
-    while state.turns < MAX_TURNS:
-        # Agent decides next message
-        agent_message = decide_next_message(state.history)
-        state.history.append({
-            "role": "assistant",
-            "content": agent_message
-        })
-
-        # Mock scammer reply
-        scammer_reply = send_to_scammer(agent_message)
-        state.history.append({
-            "role": "user",
-            "content": scammer_reply
-        })
-
-        # Extract entities from scammer reply
-        extracted = extract_entities(scammer_reply)
-        for key in state.extracted_entities:
-            state.extracted_entities[key].extend(extracted.get(key, []))
-
-        state.turns += 1
-
-        # Stop early if valuable intelligence is captured
-        if (
-            state.extracted_entities["upi_ids"]
-            or state.extracted_entities["phishing_links"]
-        ):
-            break
-
-    # 4️⃣ Final response
-    return {
-        "conversation_id": data.conversation_id,
-        "scam_detected": True,
-        "persona_used": state.persona,
-        "confidence_score": detection["confidence_score"],
-        "matched_keywords": detection["matched_keywords"],
-        "extracted_entities": state.extracted_entities,
-        "risk_level": "HIGH",
-        "conversation_turns": state.turns
-    }
+    except Exception as e:
+        # NEVER crash the API
+        print("HONEYPOT ERROR:", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Internal honeypot processing error (handled safely)"
+        )
