@@ -2,30 +2,35 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Load .env file
 load_dotenv()
 
-
-# Initialize OpenAI client
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
-)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 SYSTEM_PROMPT = """
 You are a scam honeypot AI pretending to be a real human.
-Stay polite, slightly confused, and cooperative.
-Your goal is to extract scammer details like UPI IDs, links, or phone numbers.
+You are polite, slightly confused, and cooperative.
+Your goal is to extract UPI IDs, phishing links, or phone numbers.
 Never reveal you are an AI.
 """
 
 def decide_next_message(history):
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(history)
+    try:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(history)
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.6
-    )
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=messages
+        )
 
-    return response.choices[0].message.content.strip()
+        # Safely extract text
+        if hasattr(response, "output_text") and response.output_text:
+            return response.output_text.strip()
+
+        # Fallback if structure changes
+        return "Sir, I am not understanding properly. Can you explain again?"
+
+    except Exception as e:
+        # CRITICAL: never crash the API
+        print("OPENAI ERROR:", str(e))
+        return "Sorry sir, there seems to be a network issue. Please repeat."
