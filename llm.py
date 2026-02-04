@@ -1,36 +1,71 @@
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+
+# Try importing OpenAI SDK safely
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except Exception:
+    OPENAI_AVAILABLE = False
 
 load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 SYSTEM_PROMPT = """
-You are a scam honeypot AI pretending to be a real human.
-You are polite, slightly confused, and cooperative.
-Your goal is to extract UPI IDs, phishing links, or phone numbers.
+You are a scam honeypot AI pretending to be a real human victim.
+You must sound slightly confused, worried, and cooperative.
+Your goal is to keep the scammer talking and extract:
+- UPI IDs
+- Bank account numbers
+- Phishing links
+- Phone numbers
+
 Never reveal you are an AI.
+Never accuse the other party.
 """
 
-def decide_next_message(history):
+# Initialize OpenAI client only if possible
+client = None
+if OPENAI_AVAILABLE and OPENAI_API_KEY:
     try:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        messages.extend(history)
+        client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception:
+        client = None
 
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=messages
-        )
 
-        # Safely extract text
-        if hasattr(response, "output_text") and response.output_text:
-            return response.output_text.strip()
+def decide_next_message(history: list) -> str:
+    """
+    Decide next honeypot message.
+    Falls back gracefully if OpenAI fails or quota is exceeded.
+    """
 
-        # Fallback if structure changes
-        return "Sir, I am not understanding properly. Can you explain again?"
+    # ---- Attempt LLM call ----
+    if client:
+        try:
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            messages.extend(history)
 
-    except Exception as e:
-        # CRITICAL: never crash the API
-        print("OPENAI ERROR:", str(e))
-        return "Sorry sir, there seems to be a network issue. Please repeat."
+            response = client.responses.create(
+                model="gpt-4.1-mini",
+                input=messages
+            )
+
+            if hasattr(response, "output_text") and response.output_text:
+                return response.output_text.strip()
+
+        except Exception as e:
+            # Log but NEVER crash
+            print("OPENAI ERROR (handled safely):", str(e))
+
+    # ---- FALLBACK MODE (NO LLM / NO QUOTA) ----
+    fallback_responses = [
+        "Sir I am very scared now, please tell me what I should do.",
+        "I am not understanding properly, can you explain again?",
+        "You said verification is needed, where should I do that?",
+        "Is there any UPI ID or link where I must complete this?",
+        "Please help me, my account is very important."
+    ]
+
+    # Simple rotation to sound natural
+    return fallback_responses[len(history) % len(fallback_responses)]
