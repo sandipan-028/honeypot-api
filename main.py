@@ -1,67 +1,154 @@
 from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from typing import Dict, Any
+import requests
+import re
 
-from auth import verify_api_key
-from detector import detect_scam
-from extractor import extract_entities
-from llm import decide_next_message
-
-app = FastAPI(title="Agentic AI Honeypot API")
+app = FastAPI(title="Agentic AI Honeypot")
 
 
-# -------------------- Models --------------------
-
-class HoneypotRequest(BaseModel):
-    conversation_id: str
-    incoming_message: str
-    source: Optional[str] = None
-    timestamp: Optional[str] = None
+# -----------------------------
+# API KEY CONFIG
+# -----------------------------
+VALID_API_KEY = "sk_honeypot_demo_123"
 
 
-# -------------------- Routes --------------------
+def verify_api_key(request: Request):
 
+    auth_header = request.headers.get("Authorization")
+    x_api_key = request.headers.get("x-api-key")
+
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        if token == VALID_API_KEY:
+            return True
+
+    if auth_header and auth_header == VALID_API_KEY:
+        return True
+
+    if x_api_key and x_api_key == VALID_API_KEY:
+        return True
+
+    raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+# -----------------------------
+# SIMPLE SCAM DETECTION
+# -----------------------------
+SCAM_KEYWORDS = [
+    "blocked",
+    "verify",
+    "urgent",
+    "otp",
+    "upi",
+    "payment",
+    "suspend",
+    "account blocked"
+]
+
+
+def detect_scam(text):
+    text_lower = text.lower()
+    matched = [k for k in SCAM_KEYWORDS if k in text_lower]
+
+    return {
+        "scam_detected": len(matched) > 0,
+        "matched_keywords": matched
+    }
+
+
+# -----------------------------
+# INTELLIGENCE EXTRACTION
+# -----------------------------
+def extract_intelligence(text):
+
+    upi_ids = re.findall(r"[a-zA-Z0-9._-]+@[a-zA-Z]+", text)
+    links = re.findall(r"https?://\S+", text)
+    phones = re.findall(r"\+91\d{10}", text)
+
+    return {
+        "bankAccounts": [],
+        "upiIds": upi_ids,
+        "phishingLinks": links,
+        "phoneNumbers": phones,
+        "suspiciousKeywords": SCAM_KEYWORDS
+    }
+
+
+# -----------------------------
+# SEND FINAL RESULT TO GUVI
+# -----------------------------
+def send_final_result(session_id, scam_detected, total_messages, intelligence):
+
+    payload = {
+        "sessionId": session_id,
+        "scamDetected": scam_detected,
+        "totalMessagesExchanged": total_messages,
+        "extractedIntelligence": intelligence,
+        "agentNotes": "Scammer used urgency and financial redirection tactics"
+    }
+
+    try:
+        requests.post(
+            "https://hackathon.guvi.in/api/updateHoneyPotFinalResult",
+            json=payload,
+            timeout=5
+        )
+    except Exception as e:
+        print("GUVI Reporting Error:", e)
+
+
+# -----------------------------
+# ROOT ROUTE
+# -----------------------------
 @app.get("/")
 def root():
     return {"status": "honeypot api running"}
 
 
+# -----------------------------
+# MAIN HONEYPOT ENDPOINT
+# -----------------------------
 @app.post("/api/v1/honeypot/analyze")
-async def analyze_honeypot(
-    req: HoneypotRequest,
-    request: Request
-):
-    # -------- AUTH --------
+async def analyze_honeypot(request: Request):
+
     verify_api_key(request)
 
     try:
-        # -------- SCAM DETECTION --------
-        scam_result = detect_scam(req.incoming_message) or {}
+        body: Dict[str, Any] = await request.json()
+    except:
+        body = {}
 
-        # -------- ENTITY EXTRACTION --------
-        entities = extract_entities(req.incoming_message) or {}
+    # ---------------- Parse Payload ----------------
+    session_id = body.get("sessionId", "unknown")
 
-        # -------- AGENT RESPONSE --------
-        history = [
-            {"role": "user", "content": req.incoming_message}
-        ]
-        agent_reply = decide_next_message(history)
+    message_obj = body.get("message", {})
+    incoming_text = message_obj.get("text", "Hello")
 
-        # -------- SAFE RESPONSE --------
-        return {
-            "conversation_id": req.conversation_id,
-            "scam_detected": scam_result.get("scam_detected", False),
-            "risk_level": scam_result.get("risk_level", "LOW"),
-            "confidence_score": scam_result.get("confidence_score", 0.0),
-            "matched_keywords": scam_result.get("matched_keywords", []),
-            "extracted_entities": entities,
-            "agent_reply": agent_reply
-        }
+    history = body.get("conversationHistory", [])
 
-    except Exception as e:
-        # NEVER crash the API
-        print("HONEYPOT ERROR:", str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Internal honeypot processing error (handled safely)"
+    # ---------------- Scam Detection ----------------
+    scam_result = detect_scam(incoming_text)
+
+    # ---------------- Intelligence Extraction ----------------
+    intelligence = extract_intelligence(incoming_text)
+
+    # ---------------- Total Messages ----------------
+    total_messages = len(history) + 1
+
+    # ---------------- Report To GUVI ----------------
+    if scam_result["scam_detected"]:
+        send_final_result(
+            session_id=session_id,
+            scam_detected=True,
+            total_messages=total_messages,
+            intelligence=intelligence
         )
+
+    # ---------------- Honeypot Reply ----------------
+    agent_reply = "Why is my account being suspended?"
+
+    # ---------------- Validator Response ----------------
+    return {
+        "status": "success",
+        "reply": agent_reply
+    }

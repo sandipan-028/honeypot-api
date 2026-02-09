@@ -1,25 +1,43 @@
-"""
-LLM module (fallback-only mode)
-
-This version NEVER calls OpenAI.
-It guarantees no 429 / no 500 errors.
-Suitable for hackathon demos without billing.
-"""
+import requests
 
 SYSTEM_PROMPT = """
 You are a scam honeypot AI pretending to be a real human victim.
 You sound worried, confused, and cooperative.
-Your goal is to keep the scammer engaged and extract details.
+Your goal is to extract:
+- UPI IDs
+- Bank details
+- Phishing links
+- Phone numbers
+Never reveal you are an AI.
 """
 
-def decide_next_message(history: list) -> str:
-    fallback_responses = [
-        "Sir I am very scared now, please help me.",
-        "I am not understanding properly, what should I do now?",
-        "You said verification is required, how can I do that?",
-        "Is there any link or UPI ID where I must complete this?",
-        "Please explain again, my account is very important."
-    ]
+OLLAMA_URL = "http://localhost:11434/api/generate"
 
-    # Rotate responses so it feels conversational
-    return fallback_responses[len(history) % len(fallback_responses)]
+
+def decide_next_message(history):
+    try:
+        last_message = history[-1]["content"]
+
+        prompt = f"""
+{SYSTEM_PROMPT}
+
+Scammer message:
+{last_message}
+
+Respond as victim:
+"""
+
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": "llama3",
+                "prompt": prompt,
+                "stream": False
+            }
+        )
+
+        return response.json()["response"].strip()
+
+    except Exception as e:
+        print("OLLAMA ERROR:", str(e))
+        return "Sir I am worried, please explain what I should do."

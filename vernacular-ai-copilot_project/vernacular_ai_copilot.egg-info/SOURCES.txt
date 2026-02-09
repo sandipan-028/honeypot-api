@@ -1,0 +1,8 @@
+dev-requirements.txt
+pyproject.toml
+tests/test_vernacular-ai-copilot.py
+vernacular_ai_copilot.egg-info/PKG-INFO
+vernacular_ai_copilot.egg-info/SOURCES.txt
+vernacular_ai_copilot.egg-info/dependency_links.txt
+vernacular_ai_copilot.egg-info/requires.txt
+vernacular_ai_copilot.egg-info/top_level.txt

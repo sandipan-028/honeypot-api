@@ -1,0 +1,11 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Package: vernacular-ai-copilot",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "vernacular-ai-copilot"
+        }
+    ]
+}
